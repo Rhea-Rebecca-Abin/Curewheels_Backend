@@ -127,7 +127,7 @@ app.post("/login", (req, res) => {
   );
 });
 
-app.get("/profile/:Cus_ID", (req, res) => {
+/*app.get("/profile/:Cus_ID", (req, res) => {
   const cus_id = req.params.Cus_ID;
   db.query(
     "SELECT * FROM Customers WHERE Cus_ID= ?",
@@ -148,7 +148,484 @@ app.get("/profile/:Cus_ID", (req, res) => {
       }
     }
   );
+});*/
+
+app.get("/profile", (req, res) => {
+  // Retrieve the Cus_ID from the session
+  const cus_id = req.session.userid;
+
+  // Check if the user is logged in
+  if (!cus_id) {
+    return res.status(401).json({
+      status: "error",
+      error: "Unauthorized - User not logged in",
+    });
+  }
+
+  // Fetch user profile using the cus_id from the session
+  db.query(
+    "SELECT Cus_ID, Name, DOB, Address, ContactNo, Email, CreditPoints FROM Customers WHERE Cus_ID = ?",
+    [cus_id],
+    (err, result) => {
+      if (err) {
+        console.error(err);
+        return res.status(500).json({
+          status: "error",
+          error: "Database error",
+        });
+      }
+
+      if (result.length > 0) {
+        const userProfile = result[0];
+        res.json({
+          status: "ok",
+          userProfile: userProfile,
+        });
+      } else {
+        res.status(404).json({
+          status: "error",
+          error: "No profile data found for this Customer",
+        });
+      }
+    }
+  );
 });
+
+app.get("/pharmacies", (req, res) => {
+  db.query("SELECT Name FROM pharmacy", (err, result) => {
+    if (err) {
+      console.error(err);
+      return res.status(500).json({
+        status: "error",
+        error: "Database error",
+      });
+    }
+
+    if (result.length > 0) {
+      const pharmacyNames = result.map((pharmacy) => pharmacy.Name);
+      console.log("Pharmacy Names:", pharmacyNames);
+      return res.json({
+        status: "ok",
+        pharmacyNames: pharmacyNames,
+      });
+    } else {
+      return res.status(404).json({
+        status: "error",
+        error: "No pharmacies found",
+      });
+    }
+  });
+});
+
+app.get("/pharmacy/medicines/:pharmacyName", (req, res) => {
+  const pharmacyName = req.params.pharmacyName;
+
+  // Step 1: Select PH_ID corresponding to the given pharmacyName
+  db.query(
+    "SELECT PH_ID FROM pharmacy WHERE Name = ?",
+    [pharmacyName],
+    (err, resultPharmacy) => {
+      if (err) {
+        console.error(err);
+        return res.status(500).json({
+          status: "error",
+          error: "Database error",
+        });
+      }
+
+      if (resultPharmacy.length > 0) {
+        const phId = resultPharmacy[0].PH_ID;
+
+        // Step 2: Select M_ID details corresponding to the PH_ID from the Med_pharmacy table
+        db.query(
+          "SELECT M_ID, Qty_available FROM Med_pharmacy WHERE PH_ID = ?",
+          [phId],
+          (err, resultMedPharmacy) => {
+            if (err) {
+              console.error(err);
+              return res.status(500).json({
+                status: "error",
+                error: "Database error",
+              });
+            }
+
+            if (resultMedPharmacy.length > 0) {
+              // Step 3: Use the M_ID values to fetch medicine details from the medicine table
+              const medicineDetails = resultMedPharmacy.map((med) => {
+                return {
+                  M_ID: med.M_ID,
+                  Qty_available: med.Qty_available,
+                };
+              });
+
+              const mIds = medicineDetails.map((med) => med.M_ID);
+
+              db.query(
+                "SELECT * FROM medicine WHERE M_ID IN (?)",
+                [mIds],
+                (err, resultMedicine) => {
+                  if (err) {
+                    console.error(err);
+                    return res.status(500).json({
+                      status: "error",
+                      error: "Database error",
+                    });
+                  }
+
+                  const medicineDetailsWithInfo = medicineDetails.map((med) => {
+                    const medicineInfo = resultMedicine.find(
+                      (info) => info.M_ID === med.M_ID
+                    );
+                    return {
+                      ...med,
+                      Name: medicineInfo.Name,
+                      Price: medicineInfo.Price,
+                      Mfg_date: medicineInfo.Mfg_date,
+                      Exp_date: medicineInfo.Exp_date,
+                      Manufacturer: medicineInfo.Manufacturer,
+                    };
+                  });
+
+                  return res.json({
+                    status: "ok",
+                    medicineDetails: medicineDetailsWithInfo,
+                  });
+                }
+              );
+            } else {
+              return res.status(404).json({
+                status: "error",
+                error: "No medicines found for this pharmacy",
+              });
+            }
+          }
+        );
+      } else {
+        return res.status(404).json({
+          status: "error",
+          error: "Pharmacy not found",
+        });
+      }
+    }
+  );
+});
+// Route to add medicine to Order_med_details table
+app.post("/order/addmedicine/:PH_ID/:M_ID", (req, res) => {
+  const PH_ID = req.params.PH_ID; // Get PH_ID from route parameters
+  const M_ID = req.params.M_ID; // Get M_ID from route parameters
+  const Qty = req.body.Qty; // Get Qty from request body
+  const Cus_ID = req.session.userid; // Assuming  session variable for customer ID
+
+  if (Qty === null || isNaN(Qty)) {
+    return res.status(400).json({
+      status: "error",
+      error: "Invalid quantity. Please provide a valid quantity.",
+    });
+  }
+  // Step 1: Check if the requested quantity is less than or equal to the available quantity
+  db.query(
+    "SELECT Qty_available FROM Med_pharmacy WHERE PH_ID = ? AND M_ID = ?",
+    [PH_ID, M_ID],
+    (err, resultQty) => {
+      if (err) {
+        console.error(err);
+        return res.status(500).json({
+          status: "error",
+          error: "Database error",
+        });
+      }
+
+      if (resultQty.length > 0) {
+        const availableQty = resultQty[0].Qty_available;
+
+        if (Qty > availableQty) {
+          return res.status(400).json({
+            status: "error",
+            error: "Requested quantity exceeds available quantity",
+          });
+        }
+
+        // Step 2: Retrieve additional information from pharmacy and medicine tables
+        db.query(
+          "SELECT pharmacy.Name AS PharmacyName, medicine.Name AS MedicineName, medicine.Price FROM pharmacy, medicine WHERE pharmacy.PH_ID = ? AND medicine.M_ID = ?",
+          [PH_ID, M_ID],
+          (err, resultInfo) => {
+            if (err) {
+              console.error(err);
+              return res.status(500).json({
+                status: "error",
+                error: "Database error",
+              });
+            }
+
+            if (resultInfo.length > 0) {
+              const PharmacyName = resultInfo[0].PharmacyName;
+              const MedicineName = resultInfo[0].MedicineName;
+              const Price = resultInfo[0].Price;
+
+              // Step 3: Insert the order details into the Order_med_details table with additional information
+              db.query(
+                "INSERT INTO Order_Med_details (Cus_ID, PH_ID, M_ID, PharmacyName, MedicineName, Price, Quantity) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [Cus_ID, PH_ID, M_ID, PharmacyName, MedicineName, Price, Qty],
+                (err, result) => {
+                  if (err) {
+                    console.error(err);
+                    return res.status(500).json({
+                      status: "error",
+                      error: "Database error",
+                    });
+                  }
+
+                  return res.json({
+                    status: "ok",
+                    message: "Medicine added to order successfully",
+                  });
+                }
+              );
+            } else {
+              return res.status(404).json({
+                status: "error",
+                error: "Pharmacy or Medicine not found",
+              });
+            }
+          }
+        );
+      } else {
+        return res.status(404).json({
+          status: "error",
+          error: "Pharmacy or Medicine not found",
+        });
+      }
+    }
+  );
+});
+app.post("/order/deletemedicine/:PH_ID/:M_ID", (req, res) => {
+  const PH_ID = req.params.PH_ID; // Get PH_ID from route parameters
+  const M_ID = req.params.M_ID; // Get M_ID from route parameters
+  const QtyToDelete = req.body.QtyToDelete; // Get Qty to delete from request body
+  const Cus_ID = req.session.userid; // Assuming you have a session variable for customer ID
+
+  // Check if QtyToDelete is a valid number
+  if (isNaN(QtyToDelete)) {
+    return res.status(400).json({
+      status: "error",
+      error: "QtyToDelete must be a valid number",
+    });
+  }
+
+  // Fetch current quantity from the Order_Med_details table
+  db.query(
+    "SELECT Quantity FROM Order_Med_details WHERE Cus_ID = ? AND PH_ID = ? AND M_ID = ?",
+    [Cus_ID, PH_ID, M_ID],
+    (err, resultQty) => {
+      if (err) {
+        console.error(err);
+        return res.status(500).json({
+          status: "error",
+          error: "Database error",
+        });
+      }
+
+      if (resultQty.length > 0) {
+        const currentQty = resultQty[0].Quantity;
+
+        // Check if both currentQty and QtyToDelete are valid numbers
+        if (isNaN(currentQty) || isNaN(QtyToDelete)) {
+          return res.status(400).json({
+            status: "error",
+            error: "Invalid quantity values",
+          });
+        }
+
+        // Calculate the new quantity after deletion
+        let newQty = currentQty - QtyToDelete;
+
+        // Check if newQty is a valid number
+        if (isNaN(newQty)) {
+          newQty = 0; // Set a default value if newQty is not a number
+        }
+
+        // Debugging: Print the value of newQty to the console
+        console.log("New Quantity:", newQty);
+
+        if (newQty <= 0) {
+          // If the new quantity is zero or negative, remove the row
+          db.query(
+            "DELETE FROM Order_Med_details WHERE Cus_ID = ? AND PH_ID = ? AND M_ID = ?",
+            [Cus_ID, PH_ID, M_ID],
+            (err, result) => {
+              if (err) {
+                console.error(err);
+                return res.status(500).json({
+                  status: "error",
+                  error: "Database error",
+                });
+              }
+
+              return res.json({
+                status: "ok",
+                message: "Medicine deleted from order successfully",
+              });
+            }
+          );
+        } else {
+          // Update the quantity in the Order_Med_details table
+          db.query(
+            "UPDATE Order_Med_details SET Quantity = ? WHERE Cus_ID = ? AND PH_ID = ? AND M_ID = ?",
+            [newQty, Cus_ID, PH_ID, M_ID],
+            (err, result) => {
+              if (err) {
+                console.error(err);
+                return res.status(500).json({
+                  status: "error",
+                  error: "Database error",
+                });
+              }
+
+              return res.json({
+                status: "ok",
+                message: "Medicine quantity updated in order successfully",
+              });
+            }
+          );
+        }
+      } else {
+        return res.status(404).json({
+          status: "error",
+          error: "Medicine not found in the order",
+        });
+      }
+    }
+  );
+});
+app.get("/order/status", (req, res) => {
+  const Cus_ID = req.session.userid;
+
+  // Step 1: Fetch order details for the specified customer
+  db.query(
+    "SELECT MedicineName, Quantity, PH_ID, PharmacyName, Price FROM order_med_details WHERE Cus_ID = ?",
+    [Cus_ID],
+    (err, orderDetails) => {
+      if (err) {
+        console.error(err);
+        return res.status(500).json({
+          status: "error",
+          error: "Database error",
+        });
+      }
+
+      if (orderDetails.length === 0) {
+        return res.status(404).json({
+          status: "error",
+          error: "No order details found for the specified customer",
+        });
+      }
+
+      // Step 2: Calculate total price and credit points
+      let totalPrice = 0;
+      let creditPoints = 0;
+
+      for (const orderItem of orderDetails) {
+        totalPrice += orderItem.Quantity * orderItem.Price;
+      }
+
+      if (totalPrice > 1000) {
+        creditPoints = 10;
+      } else if (totalPrice >= 500) {
+        creditPoints = 5;
+      }
+
+      // Step 3: Generate a random order ID
+      const orderID = Math.floor(1000 + Math.random() * 9000);
+
+      // Step 4: Insert order confirmation details into order_confirm_med table
+      db.query(
+        "INSERT INTO order_confirm_med (Cus_ID, Order_ID, Total_Price, Credit_Points) VALUES (?, ?, ?, ?)",
+        [Cus_ID, orderID, totalPrice, creditPoints],
+        (err, result) => {
+          if (err) {
+            console.error(err);
+            return res.status(500).json({
+              status: "error",
+              error: "Database error",
+            });
+          }
+
+          // Step 5: Send the order confirmation details to the frontend
+          return res.json({
+            status: "ok",
+            orderDetails,
+            total: totalPrice,
+            creditPoints,
+            orderID,
+          });
+        }
+      );
+    }
+  );
+});
+app.post("/update/quantity", (req, res) => {
+  const Cus_ID = req.session.userid;
+
+  // Step 1: Fetch order details for the specified customer
+  db.query(
+    "SELECT MedicineName, Quantity, PH_ID FROM order_med_details WHERE Cus_ID = ?",
+    [Cus_ID],
+    (err, orderDetails) => {
+      if (err) {
+        console.error(err);
+        return res.status(500).json({
+          status: "error",
+          error: "Database error",
+        });
+      }
+
+      if (orderDetails.length === 0) {
+        return res.status(404).json({
+          status: "error",
+          error: "No order details found for the specified customer",
+        });
+      }
+
+      // Step 2: Update quantity in the med_pharmacy table
+      orderDetails.forEach((orderItem) => {
+        const { PH_ID, MedicineName, Quantity: orderedQuantity } = orderItem;
+
+        db.query(
+          "UPDATE med_pharmacy SET Qty_available = Qty_available - ? WHERE PH_ID = ? AND M_ID = (SELECT M_ID FROM medicine WHERE Name = ?)",
+          [orderedQuantity, PH_ID, MedicineName],
+          (updateErr, updateResult) => {
+            if (updateErr) {
+              console.error(updateErr);
+              return res.status(500).json({
+                status: "error",
+                error: "Database error",
+              });
+            }
+          }
+        );
+      });
+
+      // Step 3: Display success message
+      return res.json({
+        status: "ok",
+        message: "Your order is successful. Medicine quantities updated.",
+      });
+    }
+  );
+});
+
+
+
+
+
+
+
+
+
+
+
+
 app.listen("3000", () => {
   console.log("Server running on port 3000");
 });
