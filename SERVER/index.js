@@ -660,6 +660,7 @@ app.post("/order/deletemedicine/:PH_ID/:M_ID", (req, res) => {
   );
 });*/
 
+/*Working ok version v1
 app.get("/order/status", (req, res) => {
   const Cus_ID = req.session.userid;
 
@@ -726,6 +727,91 @@ app.get("/order/status", (req, res) => {
     }
   );
 });
+*/
+
+//Updated order/status route with updation to customers table- creditpoints
+app.get("/order/status", (req, res) => {
+  const Cus_ID = req.session.userid;
+
+  // Step 1: Fetch order details for the specified customer
+  db.query(
+    "SELECT MedicineName, Quantity, PH_ID, PharmacyName, Price FROM order_med_details WHERE Cus_ID = ?",
+    [Cus_ID],
+    (err, orderDetails) => {
+      if (err) {
+        console.error(err);
+        return res.status(500).json({
+          status: "error",
+          error: "Database error",
+        });
+      }
+
+      if (orderDetails.length === 0) {
+        return res.status(404).json({
+          status: "error",
+          error: "No order details found for the specified customer",
+        });
+      }
+
+      // Step 2: Calculate total price and credit points
+      let totalPrice = 0;
+      let creditPoints = 0;
+
+      for (const orderItem of orderDetails) {
+        totalPrice += orderItem.Quantity * orderItem.Price;
+      }
+
+      if (totalPrice > 1000) {
+        creditPoints = 10;
+      } else if (totalPrice >= 500) {
+        creditPoints = 5;
+      }
+
+      // Step 3: Generate a random order ID
+      const orderID = Math.floor(1000 + Math.random() * 9000);
+
+      // Step 4: Insert order confirmation details into order_confirm_medi table
+      db.query(
+        "INSERT INTO order_confirm_medi (Cus_ID, Order_ID, Total_Price, Credit_Points) VALUES (?, ?, ?, ?)",
+        [Cus_ID, orderID, totalPrice, creditPoints],
+        (err, result) => {
+          if (err) {
+            console.error(err);
+            return res.status(500).json({
+              status: "error",
+              error: "Database error",
+            });
+          }
+
+          // Step 5: Update Credit_Points in the customers table
+          db.query(
+            "UPDATE customers SET CreditPoints = CreditPoints + ? WHERE Cus_ID = ?",
+            [creditPoints, Cus_ID],
+            (err, updateResult) => {
+              if (err) {
+                console.error(err);
+                return res.status(500).json({
+                  status: "error",
+                  error: "Database error while updating Credit Points",
+                });
+              }
+
+              // Step 6: Send the order confirmation details to the frontend
+              return res.json({
+                status: "ok",
+                orderDetails,
+                total: totalPrice,
+                creditPoints,
+                orderID,
+              });
+            }
+          );
+        }
+      );
+    }
+  );
+});
+
 
 /*Update qty - v1
 app.post("/update/quantity", (req, res) => {
